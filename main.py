@@ -217,8 +217,8 @@ Return ONLY valid JSON array:"""
     except Exception as e:
         error_msg = str(e)
         if "rate_limit" in error_msg.lower() and retry_count < 2:
-            print(f"    Rate limited, waiting 30s and retrying...")
-            time.sleep(30)
+            print(f"    Rate limited, waiting 2 minutes and retrying...")
+            time.sleep(120)
             return analyze_articles_with_claude(articles, retry_count + 1)
         print(f"  ⚠️ Claude API error: {e}")
         return []
@@ -343,7 +343,7 @@ def run_backfill(start_date: str = "2025-11-01"):
     total_batches = (len(unique) + batch_size - 1) // batch_size
 
     print(f"  Will process {total_batches} batches of {batch_size} articles each")
-    print(f"  Estimated time: ~{total_batches * 45 // 60} minutes\n")
+    print(f"  Estimated time: ~{total_batches * 3} minutes\n")
 
     for i in range(0, len(unique), batch_size):
         batch = unique[i:i + batch_size]
@@ -353,10 +353,10 @@ def run_backfill(start_date: str = "2025-11-01"):
         analyzed.extend(results)
         print(f"    ✓ Got {len(results)} results")
 
-        # Wait 45 seconds between batches to safely respect rate limits
+        # Wait 3 minutes between batches to safely respect rate limits (30k tokens/min)
         if i + batch_size < len(unique):
-            wait_time = 45
-            print(f"    Waiting {wait_time}s before next batch...")
+            wait_time = 180  # 3 minutes
+            print(f"    Waiting 3 minutes before next batch...")
             time.sleep(wait_time)
 
     relevant = sum(1 for a in analyzed if a.get("relevance"))
