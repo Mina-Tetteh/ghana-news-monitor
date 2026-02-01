@@ -167,21 +167,28 @@ def analyze_articles_with_claude(articles: list, retry_count: int = 0) -> list:
 
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    # Minimal article data to reduce tokens
-    minimal_articles = []
+    # Build article list with full field names
+    article_list = []
     for a in articles:
-        minimal_articles.append({
-            "t": a.get("title", "")[:100],
-            "l": a.get("link", ""),
-            "d": a.get("date", ""),
-            "s": a.get("source", "")
+        article_list.append({
+            "title": a.get("title", "")[:100],
+            "link": a.get("link", ""),
+            "date": a.get("date", ""),
+            "source": a.get("source", "")
         })
 
-    # Ultra-minimal prompt to reduce tokens
-    prompt = f"""Ghana crop news filter. Return JSON array only.
-For each: relevance(bool), category(cocoa/shea/cashew/coffee/general_agriculture/funding_investment), companies_mentioned([]), funding_amount(null or string), key_entities([]), summary(short), original_title, original_link, original_date, original_source.
+    prompt = f"""Analyze these articles about Ghana agriculture. Return ONLY a JSON array.
 
-{json.dumps(minimal_articles)}"""
+For each article, output this exact JSON structure:
+{{"original_title":"<title>","original_link":"<link>","original_date":"<date>","original_source":"<source>","relevance":true,"category":"cocoa","companies_mentioned":[],"funding_amount":null,"key_entities":[],"summary":"<brief>"}}
+
+Categories: cocoa, shea, cashew, coffee, general_agriculture, funding_investment
+Set relevance=true only if about Ghana/Africa cash crops or agricultural investment.
+
+Articles:
+{json.dumps(article_list)}
+
+JSON array:"""
 
     try:
         response = client.messages.create(
@@ -191,14 +198,20 @@ For each: relevance(bool), category(cocoa/shea/cashew/coffee/general_agriculture
         )
 
         text = response.content[0].text
+        print(f"    Raw response length: {len(text)} chars")
+
         cleaned = clean_json_response(text)
         results = parse_json_safely(cleaned)
 
         if results:
+            print(f"    Parsed {len(results)} items")
             return results
 
+        # Debug: show first 200 chars of response
+        print(f"    Parse failed. Response preview: {text[:200]}...")
+
         if text and retry_count < 1:
-            print(f"    Retrying due to parse error...")
+            print(f"    Retrying...")
             time.sleep(10)
             return analyze_articles_with_claude(articles, retry_count + 1)
 
@@ -207,8 +220,8 @@ For each: relevance(bool), category(cocoa/shea/cashew/coffee/general_agriculture
     except Exception as e:
         error_msg = str(e)
         if "rate_limit" in error_msg.lower() and retry_count < 3:
-            wait = 180 * (retry_count + 1)  # 3, 6, 9 minutes
-            print(f"    Rate limited, waiting {wait//60} minutes...")
+            wait = 180 * (retry_count + 1)
+            print(f"    Rate limited, waiting {wait//60} min...")
             time.sleep(wait)
             return analyze_articles_with_claude(articles, retry_count + 1)
         print(f"  ⚠️ Claude error: {e}")
@@ -242,21 +255,30 @@ def get_existing_urls(sheet) -> set:
 def append_to_sheet(articles: list) -> int:
     """Add articles to Google Sheet. Returns count added."""
     if not articles:
+        print("  No articles to add")
         return 0
+
+    print(f"  Processing {len(articles)} articles for sheet...")
 
     try:
         client = get_sheets_client()
         sheet = client.open_by_key(GOOGLE_SHEETS_ID).worksheet("News Data")
 
         existing_urls = get_existing_urls(sheet)
+        print(f"  Found {len(existing_urls)} existing URLs")
 
         rows = []
+        skipped_relevance = 0
+        skipped_duplicate = 0
+
         for article in articles:
             if not article.get("relevance"):
+                skipped_relevance += 1
                 continue
 
             url = article.get("original_link", "")
             if url in existing_urls:
+                skipped_duplicate += 1
                 continue
 
             # Safely handle list fields that might be strings or None
@@ -285,12 +307,18 @@ def append_to_sheet(articles: list) -> int:
                 datetime.now().strftime("%Y-%m-%d %H:%M")
             ])
 
+        print(f"  Skipped: {skipped_relevance} not relevant, {skipped_duplicate} duplicates")
+        print(f"  Adding {len(rows)} new rows to sheet...")
+
         if rows:
             sheet.append_rows(rows)
+            print(f"  ✓ Successfully added {len(rows)} rows")
 
         return len(rows)
     except Exception as e:
         print(f"  ⚠️ Sheets error: {e}")
+        import traceback
+        traceback.print_exc()
         return 0
 
 # =============================================================================
