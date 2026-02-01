@@ -28,15 +28,13 @@ SEARCH_QUERIES = [
     "Ghana cocoa news",
     "COCOBOD announcement",
     "Ghana shea butter industry",
-    "Ghana cashew export",
-    "Ghana coffee farming",
+    "Ghana cashew farming",
+    "Ghana coffee",
     "Ghana cocoa investment funding",
     "Ghana agriculture startup funding",
-    "cocoa farmer financing Ghana",
+    "cocoa financing Ghana",
     "shea butter investment Africa",
-    "Hershey cocoa Ghana",
-    "Tony's Chocolonely Ghana",
-    "ECOM cocoa Ghana",
+    "cashew Ghana",
     "World Cocoa Foundation Ghana",
     "Ghana Cocoa Board",
     "cocoa price Ghana",
@@ -46,6 +44,7 @@ SEARCH_QUERIES = [
 # =============================================================================
 # ENVIRONMENT CHECK
 # =============================================================================
+
 
 def check_environment():
     """Validate all required environment variables exist."""
@@ -69,6 +68,7 @@ def check_environment():
 # SERPER API - NEWS SEARCH
 # =============================================================================
 
+
 def search_news(query: str, date_from: str, date_to: str, num_results: int = 20) -> list:
     """Search for news using Serper.dev API."""
     url = "https://google.serper.dev/news"
@@ -87,7 +87,8 @@ def search_news(query: str, date_from: str, date_to: str, num_results: int = 20)
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response = requests.post(url, headers=headers,
+                                 json=payload, timeout=30)
         response.raise_for_status()
         return response.json().get("news", [])
     except Exception as e:
@@ -97,6 +98,7 @@ def search_news(query: str, date_from: str, date_to: str, num_results: int = 20)
 # =============================================================================
 # CLAUDE AI - ARTICLE ANALYSIS
 # =============================================================================
+
 
 def clean_json_response(text: str) -> str:
     """Clean and fix common JSON issues from Claude responses."""
@@ -113,7 +115,8 @@ def clean_json_response(text: str) -> str:
 
     # Fix common issues with newlines in strings
     # Replace actual newlines within strings with \n escape
-    text = re.sub(r'(?<=": ")(.*?)(?="[,}\]])', lambda m: m.group(1).replace('\n', '\\n'), text, flags=re.DOTALL)
+    text = re.sub(r'(?<=": ")(.*?)(?="[,}\]])', lambda m: m.group(
+        1).replace('\n', '\\n'), text, flags=re.DOTALL)
 
     return text
 
@@ -231,6 +234,7 @@ JSON array:"""
 # GOOGLE SHEETS
 # =============================================================================
 
+
 def get_sheets_client():
     """Create authorized Google Sheets client."""
     scopes = [
@@ -307,7 +311,8 @@ def append_to_sheet(articles: list) -> int:
                 datetime.now().strftime("%Y-%m-%d %H:%M")
             ])
 
-        print(f"  Skipped: {skipped_relevance} not relevant, {skipped_duplicate} duplicates")
+        print(
+            f"  Skipped: {skipped_relevance} not relevant, {skipped_duplicate} duplicates")
         print(f"  Adding {len(rows)} new rows to sheet...")
 
         if rows:
@@ -324,6 +329,7 @@ def append_to_sheet(articles: list) -> int:
 # =============================================================================
 # BACKFILL
 # =============================================================================
+
 
 def run_backfill(start_date: str = "2025-11-01"):
     """Run historical news backfill."""
@@ -360,7 +366,8 @@ def run_backfill(start_date: str = "2025-11-01"):
     batch_size = 3  # Tiny batches = fewer tokens per request
     total_batches = (len(unique) + batch_size - 1) // batch_size
 
-    print(f"  Processing {len(unique)} articles in {total_batches} batches of {batch_size}")
+    print(
+        f"  Processing {len(unique)} articles in {total_batches} batches of {batch_size}")
     print(f"  Estimated time: ~{total_batches} minutes\n")
 
     for i in range(0, len(unique), batch_size):
@@ -391,6 +398,7 @@ def run_backfill(start_date: str = "2025-11-01"):
 # MAIN
 # =============================================================================
 
+
 def main():
     print("\n" + "🌿" * 30)
     print("  GHANA CASH CROP NEWS MONITOR")
@@ -398,7 +406,8 @@ def main():
 
     check_environment()
 
-    mode = sys.argv[1] if len(sys.argv) > 1 else os.getenv("RUN_MODE", "backfill")
+    mode = sys.argv[1] if len(sys.argv) > 1 else os.getenv(
+        "RUN_MODE", "backfill")
     start_date = os.getenv("BACKFILL_START_DATE", "2025-11-01")
 
     if mode == "backfill":
