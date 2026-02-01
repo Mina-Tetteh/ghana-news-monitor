@@ -98,44 +98,99 @@ def search_news(query: str, date_from: str, date_to: str, num_results: int = 20)
 # CLAUDE AI - ARTICLE ANALYSIS
 # =============================================================================
 
-def analyze_articles_with_claude(articles: list) -> list:
+def clean_json_response(text: str) -> str:
+    """Clean and fix common JSON issues from Claude responses."""
+    # Extract from code blocks if present
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0]
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0]
+
+    text = text.strip()
+
+    # Remove trailing commas before ] or }
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+
+    # Fix common issues with newlines in strings
+    # Replace actual newlines within strings with \n escape
+    text = re.sub(r'(?<=": ")(.*?)(?="[,}\]])', lambda m: m.group(1).replace('\n', '\\n'), text, flags=re.DOTALL)
+
+    return text
+
+
+def parse_json_safely(text: str) -> list:
+    """Attempt to parse JSON with multiple fallback strategies."""
+    # Strategy 1: Direct parse
+    try:
+        result = json.loads(text)
+        if isinstance(result, list):
+            return result
+        return []
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Extract array portion and parse
+    try:
+        match = re.search(r'\[[\s\S]*\]', text)
+        if match:
+            cleaned = re.sub(r',\s*([}\]])', r'\1', match.group())
+            result = json.loads(cleaned)
+            if isinstance(result, list):
+                return result
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: Try to fix and parse individual objects
+    try:
+        # Find all JSON-like objects
+        objects = re.findall(r'\{[^{}]*\}', text)
+        results = []
+        for obj in objects:
+            try:
+                cleaned = re.sub(r',\s*([}\]])', r'\1', obj)
+                parsed = json.loads(cleaned)
+                results.append(parsed)
+            except json.JSONDecodeError:
+                continue
+        if results:
+            return results
+    except Exception:
+        pass
+
+    return []
+
+
+def analyze_articles_with_claude(articles: list, retry_count: int = 0) -> list:
     """Use Claude to filter and categorize articles."""
     if not articles:
         return []
 
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    prompt = f"""Analyze these news articles about Ghana's agricultural industry.
+    # Simplify article data to reduce tokens
+    simplified_articles = []
+    for a in articles:
+        simplified_articles.append({
+            "title": a.get("title", ""),
+            "link": a.get("link", ""),
+            "date": a.get("date", ""),
+            "source": a.get("source", ""),
+            "snippet": a.get("snippet", "")[:200] if a.get("snippet") else ""
+        })
 
-For each RELEVANT article (about cocoa, shea, cashew, coffee, or agricultural funding/investment in Ghana/West Africa), extract:
+    prompt = f"""Analyze these news articles about Ghana agriculture.
 
-1. relevance: true/false - Is this about Ghana cash crops or African agricultural investment?
-2. category: "cocoa" | "shea" | "cashew" | "coffee" | "general_agriculture" | "funding_investment"
-3. companies_mentioned: List of company/organization names
-4. funding_amount: If mentioned (e.g., "$5M", "GHS 2 million"), else null
-5. key_entities: Important people, government bodies, NGOs
-6. summary: 1-2 sentence summary
+For each article, determine if it's relevant to Ghana cash crops (cocoa, shea, cashew, coffee) or agricultural funding.
 
-Return ONLY a JSON array:
-[
-  {{
-    "original_title": "...",
-    "original_link": "...",
-    "original_date": "...",
-    "original_source": "...",
-    "relevance": true,
-    "category": "cocoa",
-    "companies_mentioned": ["COCOBOD"],
-    "funding_amount": null,
-    "key_entities": ["Dr. Joseph Aidoo"],
-    "summary": "..."
-  }}
-]
+Return a JSON array with this exact structure (no extra text):
+[{{"original_title":"article title","original_link":"url","original_date":"date","original_source":"source","relevance":true,"category":"cocoa","companies_mentioned":["Company"],"funding_amount":null,"key_entities":["Person"],"summary":"Brief summary"}}]
+
+Categories: cocoa, shea, cashew, coffee, general_agriculture, funding_investment
 
 Articles:
-{json.dumps(articles, indent=2)}
+{json.dumps(simplified_articles)}
 
-Return ONLY the JSON array, no other text."""
+Return ONLY valid JSON array:"""
 
     try:
         response = client.messages.create(
@@ -145,29 +200,26 @@ Return ONLY the JSON array, no other text."""
         )
 
         text = response.content[0].text
+        cleaned = clean_json_response(text)
+        results = parse_json_safely(cleaned)
 
-        # Clean response
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
+        if results:
+            return results
 
-        text = text.strip()
+        # If parsing failed but we have text, log it for debugging
+        if text and retry_count < 1:
+            print(f"    Retrying batch due to parse error...")
+            time.sleep(5)
+            return analyze_articles_with_claude(articles, retry_count + 1)
 
-        # Fix common JSON issues - remove trailing commas before ] or }
-        text = re.sub(r',\s*([}\]])', r'\1', text)
-        # Fix unescaped quotes in strings (common issue)
+        return []
 
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Try to extract just the array portion
-            match = re.search(r'\[[\s\S]*\]', text)
-            if match:
-                cleaned = re.sub(r',\s*([}\]])', r'\1', match.group())
-                return json.loads(cleaned)
-            return []
     except Exception as e:
+        error_msg = str(e)
+        if "rate_limit" in error_msg.lower() and retry_count < 2:
+            print(f"    Rate limited, waiting 30s and retrying...")
+            time.sleep(30)
+            return analyze_articles_with_claude(articles, retry_count + 1)
         print(f"  ⚠️ Claude API error: {e}")
         return []
 
@@ -216,16 +268,29 @@ def append_to_sheet(articles: list) -> int:
             if url in existing_urls:
                 continue
 
+            # Safely handle list fields that might be strings or None
+            companies = article.get("companies_mentioned", [])
+            if isinstance(companies, str):
+                companies = [companies]
+            elif not isinstance(companies, list):
+                companies = []
+
+            entities = article.get("key_entities", [])
+            if isinstance(entities, str):
+                entities = [entities]
+            elif not isinstance(entities, list):
+                entities = []
+
             rows.append([
-                article.get("original_date", ""),
-                article.get("original_title", ""),
-                article.get("original_source", ""),
-                article.get("category", ""),
-                ", ".join(article.get("companies_mentioned", [])),
-                article.get("funding_amount") or "",
-                article.get("summary", ""),
+                str(article.get("original_date", "")),
+                str(article.get("original_title", "")),
+                str(article.get("original_source", "")),
+                str(article.get("category", "")),
+                ", ".join(str(c) for c in companies),
+                str(article.get("funding_amount") or ""),
+                str(article.get("summary", "")),
                 url,
-                ", ".join(article.get("key_entities", [])),
+                ", ".join(str(e) for e in entities),
                 datetime.now().strftime("%Y-%m-%d %H:%M")
             ])
 
