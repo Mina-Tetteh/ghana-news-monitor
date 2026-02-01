@@ -336,21 +336,28 @@ def run_backfill(start_date: str = "2025-11-01"):
     print(f"\n📊 Total unique articles: {len(unique)}")
     print("🤖 Analyzing with Claude AI...")
 
-    # Process in batches (smaller batches + longer delays to avoid rate limits)
+    # Process in batches (small batches + long delays to avoid rate limits)
+    # With 100+ articles and 30k tokens/min limit, we need to go slow
     analyzed = []
-    batch_size = 8  # Reduced from 15 to stay under token limits
+    batch_size = 5  # Small batches to stay well under token limits
     total_batches = (len(unique) + batch_size - 1) // batch_size
+
+    print(f"  Will process {total_batches} batches of {batch_size} articles each")
+    print(f"  Estimated time: ~{total_batches * 45 // 60} minutes\n")
 
     for i in range(0, len(unique), batch_size):
         batch = unique[i:i + batch_size]
         batch_num = i // batch_size + 1
-        print(f"  Processing batch {batch_num}/{total_batches}...")
+        print(f"  [{batch_num}/{total_batches}] Processing {len(batch)} articles...")
         results = analyze_articles_with_claude(batch)
         analyzed.extend(results)
-        # Wait 15 seconds between batches to respect rate limits (30k tokens/min)
+        print(f"    ✓ Got {len(results)} results")
+
+        # Wait 45 seconds between batches to safely respect rate limits
         if i + batch_size < len(unique):
-            print(f"    Waiting 15s to respect rate limits...")
-            time.sleep(15)
+            wait_time = 45
+            print(f"    Waiting {wait_time}s before next batch...")
+            time.sleep(wait_time)
 
     relevant = sum(1 for a in analyzed if a.get("relevance"))
     print(f"\n✅ Relevant articles: {relevant}")
