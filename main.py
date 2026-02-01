@@ -167,35 +167,26 @@ def analyze_articles_with_claude(articles: list, retry_count: int = 0) -> list:
 
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    # Simplify article data to reduce tokens
-    simplified_articles = []
+    # Minimal article data to reduce tokens
+    minimal_articles = []
     for a in articles:
-        simplified_articles.append({
-            "title": a.get("title", ""),
-            "link": a.get("link", ""),
-            "date": a.get("date", ""),
-            "source": a.get("source", ""),
-            "snippet": a.get("snippet", "")[:200] if a.get("snippet") else ""
+        minimal_articles.append({
+            "t": a.get("title", "")[:100],
+            "l": a.get("link", ""),
+            "d": a.get("date", ""),
+            "s": a.get("source", "")
         })
 
-    prompt = f"""Analyze these news articles about Ghana agriculture.
+    # Ultra-minimal prompt to reduce tokens
+    prompt = f"""Ghana crop news filter. Return JSON array only.
+For each: relevance(bool), category(cocoa/shea/cashew/coffee/general_agriculture/funding_investment), companies_mentioned([]), funding_amount(null or string), key_entities([]), summary(short), original_title, original_link, original_date, original_source.
 
-For each article, determine if it's relevant to Ghana cash crops (cocoa, shea, cashew, coffee) or agricultural funding.
-
-Return a JSON array with this exact structure (no extra text):
-[{{"original_title":"article title","original_link":"url","original_date":"date","original_source":"source","relevance":true,"category":"cocoa","companies_mentioned":["Company"],"funding_amount":null,"key_entities":["Person"],"summary":"Brief summary"}}]
-
-Categories: cocoa, shea, cashew, coffee, general_agriculture, funding_investment
-
-Articles:
-{json.dumps(simplified_articles)}
-
-Return ONLY valid JSON array:"""
+{json.dumps(minimal_articles)}"""
 
     try:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=4000,
+            max_tokens=2000,
             messages=[{"role": "user", "content": prompt}]
         )
 
@@ -206,21 +197,21 @@ Return ONLY valid JSON array:"""
         if results:
             return results
 
-        # If parsing failed but we have text, log it for debugging
         if text and retry_count < 1:
-            print(f"    Retrying batch due to parse error...")
-            time.sleep(5)
+            print(f"    Retrying due to parse error...")
+            time.sleep(10)
             return analyze_articles_with_claude(articles, retry_count + 1)
 
         return []
 
     except Exception as e:
         error_msg = str(e)
-        if "rate_limit" in error_msg.lower() and retry_count < 2:
-            print(f"    Rate limited, waiting 2 minutes and retrying...")
-            time.sleep(120)
+        if "rate_limit" in error_msg.lower() and retry_count < 3:
+            wait = 180 * (retry_count + 1)  # 3, 6, 9 minutes
+            print(f"    Rate limited, waiting {wait//60} minutes...")
+            time.sleep(wait)
             return analyze_articles_with_claude(articles, retry_count + 1)
-        print(f"  ⚠️ Claude API error: {e}")
+        print(f"  ⚠️ Claude error: {e}")
         return []
 
 # =============================================================================
@@ -336,28 +327,26 @@ def run_backfill(start_date: str = "2025-11-01"):
     print(f"\n📊 Total unique articles: {len(unique)}")
     print("🤖 Analyzing with Claude AI...")
 
-    # Process in batches (small batches + long delays to avoid rate limits)
-    # With 100+ articles and 30k tokens/min limit, we need to go slow
+    # Process in tiny batches (3 articles) with 60s delays
     analyzed = []
-    batch_size = 5  # Small batches to stay well under token limits
+    batch_size = 3  # Tiny batches = fewer tokens per request
     total_batches = (len(unique) + batch_size - 1) // batch_size
 
-    print(f"  Will process {total_batches} batches of {batch_size} articles each")
-    print(f"  Estimated time: ~{total_batches * 3} minutes\n")
+    print(f"  Processing {len(unique)} articles in {total_batches} batches of {batch_size}")
+    print(f"  Estimated time: ~{total_batches} minutes\n")
 
     for i in range(0, len(unique), batch_size):
         batch = unique[i:i + batch_size]
         batch_num = i // batch_size + 1
-        print(f"  [{batch_num}/{total_batches}] Processing {len(batch)} articles...")
+        print(f"  [{batch_num}/{total_batches}] Analyzing {len(batch)} articles...")
         results = analyze_articles_with_claude(batch)
         analyzed.extend(results)
-        print(f"    ✓ Got {len(results)} results")
+        print(f"    ✓ {len(results)} results")
 
-        # Wait 3 minutes between batches to safely respect rate limits (30k tokens/min)
+        # Wait 60 seconds between batches
         if i + batch_size < len(unique):
-            wait_time = 180  # 3 minutes
-            print(f"    Waiting 3 minutes before next batch...")
-            time.sleep(wait_time)
+            print(f"    Waiting 60s...")
+            time.sleep(60)
 
     relevant = sum(1 for a in analyzed if a.get("relevance"))
     print(f"\n✅ Relevant articles: {relevant}")
