@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import time
+import re
 import requests
 from datetime import datetime, timedelta
 from anthropic import Anthropic
@@ -151,7 +152,21 @@ Return ONLY the JSON array, no other text."""
         elif "```" in text:
             text = text.split("```")[1].split("```")[0]
 
-        return json.loads(text.strip())
+        text = text.strip()
+
+        # Fix common JSON issues - remove trailing commas before ] or }
+        text = re.sub(r',\s*([}\]])', r'\1', text)
+        # Fix unescaped quotes in strings (common issue)
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Try to extract just the array portion
+            match = re.search(r'\[[\s\S]*\]', text)
+            if match:
+                cleaned = re.sub(r',\s*([}\]])', r'\1', match.group())
+                return json.loads(cleaned)
+            return []
     except Exception as e:
         print(f"  ⚠️ Claude API error: {e}")
         return []
